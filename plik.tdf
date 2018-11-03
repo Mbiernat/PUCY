@@ -1,0 +1,122 @@
+TITLE "Blok obsługi szeregowego łącza wejściowego";
+%-----------------------------------------------------------
+transmisja asynchroniczna, 4 bity danych, bez sprawdzania
+parzystości, szybkość transmisji 20 tysięcy bodów
+-----------------------------------------------------------%
+CONSTANT clock_period = 104;
+ % Szybkość transmisji 9600 b/s
+   Zegar próbkowania RxD –
+   20 krotność szybkości transmisji
+   clock_period = 20 000 000 / (9600 * 20) = 104 
+ %
+CONSTANT TIM_N = 7 - 1; % szerokość licznika -1 %
+SUBDESIGN lacze_szeregowe
+(
+	CLK : input; % zegar wejściowy 20 MHz %
+ 	RxD : input; % bit danych z łącza szeregowego %
+ 	CR : input; % zerowanie układu %
+ 	OUT[7..0] : output; % dana odczytana z łącza %
+ 	OK : output; % gotowosc wyniku %
+)
+
+VARIABLE
+	TIM[TIM_N..0] : DFF;	% licznik podziału sygnału CLK do częstotliwości próbkowania RxD %
+	CLK_SERIAL : TFF;	    % przerzutnik zegara – przepełnienie licznika LPR %
+
+ 
+	D1_RxD, D_RxD : DFF; % przerzutniki wejściowe RxD %
+
+	Bit_Period[3..0] : DFF; % licznik długości bitu %
+	Bit_Count[2..0] : DFF; % licznik bitów ramki %
+ 	Data_Frame[5..0]  : DFF; % rejestr bitów ramki %
+
+	OUT[7..0] : DFF; % rejestr danej odczytanej %
+ 	OK : DFF; 		 % przerzutnik sygnału zakończenia transmisji %
+
+
+ 	AUT : machine of bits (Q[2..0])
+ 	with states (S0,S1,S2,S3,S4,S5);
+
+BEGIN
+
+	%-----------------------------------%
+	% 			Inicjalizacja			%
+	%-----------------------------------%
+	TIM[TIM_N..0].clk  = CLK;
+	TIM[TIM_N..0].clrn = CR;
+
+	CLK_SERIAL.clk  = CLK;
+	CLK_SERIAL.clrn = CR;
+
+	D1_RxD.clk = CLK; 
+	D_RxD .clk = CLK;
+
+
+	Bit_Period[3..0].clk = CLK_SERIAL; 	
+	Bit_Count[2..0] .clk = CLK_SERIAL; 
+
+ 	Data_Frame[5..0].clk = CLK_SERIAL; 
+	Data_Frame[5..0].prn = CR; 
+
+
+	OUT[7..0].clk = CLK_SERIAL;
+	OK.clk  = CLK_SERIAL; 
+	OK.clrn = CR;
+
+	AUT.clk = CLK_SERIAL; 
+	AUT.reset = !CR; 
+
+	%-----------------------------------%
+	% 				Kod					%
+	%-----------------------------------%
+	% Synchronizacja RxD %
+	D1_RxD = RxD; 
+	D_RxD = D1_RxD;
+
+	% uzyskanie zegara próbkowania RxD %
+	if TIM[] < clock_period - 1  then 
+		TIM[] = TIM[] + 1;
+ 	else 
+		TIM[] = 0; 
+		TIM_OverFlow = VCC; 
+	end if;
+
+
+
+	case AUT is
+ 		when S0 => Bit_Period[]=0; OUT[]=OUT[]; OK=OK;
+ 			if (D_RxD==0) then 
+				AUT=S1; 
+			else 
+				AUT=S0; 
+			end if;
+ 
+
+		when S1 => Bit_Period[] = Bit_Period[]+1; WY[]=0; OK=GND;
+ 			if (LDB[]<3) then 
+				AUT=S1; 
+			else 
+				AUT=S2; 
+			end if;
+ 
+		when S2 => RR[]=0-1; LDB[]=0; LBR[]=0; WY[]=WY[]; OK=GND;
+ 			if (D_RxD==0) then AUT=S3; else AUT=S0; end if;
+ 
+		when S3 => RR[]=(D_RxD,RR[5..1]);
+ 			LDB[]=0; LBR[]=LBR[]+1; WY[]=WY[]; OK=GND;
+ 			if (LBR[]<5) then AUT=S4; else AUT=S5; end if;
+ 
+		when S4 => RR[]=RR[]; LDB[]=LDB[]+1;
+ 			LBR[]=LBR[]; WY[]=WY[]; OK=GND;
+ 			if (LDB[]<8) then AUT=S4; else AUT=S3; end if;
+ 
+		when S5 => RR[]=RR[]; WY[]=RR[4..1];
+ 			if (RR0==GND)&(RR5==VCC) then 
+				OK=VCC; 
+			else 
+				OK=GND; 
+			end if; AUT=S0;
+
+	end case;
+
+END;
